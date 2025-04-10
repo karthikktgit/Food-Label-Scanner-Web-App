@@ -15,5 +15,4 @@
 
 ---
 
-## 📁 Folder Structure
 

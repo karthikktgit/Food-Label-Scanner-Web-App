@@ -15,37 +15,37 @@ const uploadContainer = document.getElementById('uploadContainer');
 const scannedImage = document.getElementById('scannedImage');
 const productName = document.getElementById('productName');
 const ingredientsList = document.getElementById('ingredientsList');
-const allergensList = document.getElementById('allergensList');
-const allergenSection = document.getElementById('allergenSection');
-const nutritionFacts = document.getElementById('nutritionFacts');
 const healthScore = document.getElementById('healthScore');
 const newScanButton = document.getElementById('newScanButton');
+const imageUpload = document.getElementById('imageUpload');
+const preview = document.getElementById('preview');
 
 let stream = null;
 let isCameraMode = true;
+let nutritionReference = {};
 
-const sampleProducts = [
-  // Sample product data as before...
-];
+// Load reference JSON
+fetch('nutritional_facts_reference.json')
+  .then(response => response.json())
+  .then(data => nutritionReference = data);
 
-// Event Listeners
 scanButton.addEventListener('click', openScanner);
 closeScanner.addEventListener('click', closeScannerModal);
 closeResults.addEventListener('click', closeResultsModal);
 switchMode.addEventListener('click', toggleMode);
 captureButton.addEventListener('click', captureImage);
 fileUpload.addEventListener('change', handleFileUpload);
+imageUpload.addEventListener('change', handleImageUploadFromHero);
 newScanButton.addEventListener('click', () => {
   closeResultsModal();
+  resetState();
   openScanner();
 });
 
-// Modal Handlers
 function openScanner() {
-  const scannerModal = document.getElementById('scannerModal');
   scannerModal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
-  startCamera(); // Only if using webcam
+  if (isCameraMode) startCamera();
 }
 
 function closeScannerModal() {
@@ -74,6 +74,15 @@ function toggleMode() {
     captureButton.innerHTML = '<i class="fas fa-upload mr-1"></i> Upload';
     stopCamera();
   }
+}
+
+function resetState() {
+  ingredientsList.innerHTML = '';
+  healthScore.textContent = '';
+  scannedImage.src = '';
+  productName.textContent = '';
+  preview.src = '';
+  preview.classList.add("hidden");
 }
 
 async function startCamera() {
@@ -118,12 +127,33 @@ function handleFileUpload(e) {
   }
 }
 
+function handleImageUploadFromHero(e) {
+  const file = e.target.files[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = function (event) {
+      const imageDataUrl = event.target.result;
+      preview.src = imageDataUrl;
+      preview.classList.remove("hidden");
+      processImage(imageDataUrl);
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
 function processImage(imageData) {
   closeScannerModal();
   showResults(imageData);
-  setTimeout(() => {
-    analyzeFood(imageData);
-  }, 1500);
+
+  Tesseract.recognize(imageData, 'eng', {
+    logger: m => console.log(m)
+  }).then(({ data: { text } }) => {
+    productName.textContent = "Scan Complete";
+    analyzeOCRText(text, imageData);
+  }).catch(err => {
+    console.error("OCR failed:", err);
+    productName.textContent = "Failed to read label";
+  });
 }
 
 function showResults(imageData) {
@@ -131,71 +161,115 @@ function showResults(imageData) {
   resultsModal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   productName.textContent = 'Analyzing...';
-  ingredientsList.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-blue-500 text-2xl"></i><p class="mt-2 text-gray-500">Analyzing ingredients...</p></div>';
-  allergenSection.classList.add('hidden');
-  nutritionFacts.innerHTML = '';
+  ingredientsList.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-blue-500 text-2xl"></i><p class="mt-2 text-gray-500">Analyzing nutrition...</p></div>';
+  healthScore.textContent = '';
 }
 
-function analyzeFood(imageData) {
-  const randomProduct = sampleProducts[Math.floor(Math.random() * sampleProducts.length)];
-  productName.textContent = randomProduct.name;
-  healthScore.textContent = randomProduct.healthScore;
-  healthScore.className = `px-2 py-1 rounded-full text-xs font-medium ${randomProduct.healthScoreClass}`;
+function getClosestMatch(term, dictionary) {
+  let bestMatch = null;
+  let highestScore = 0;
+
+  for (const key in dictionary) {
+    const score = similarity(term, key);
+    if (score > highestScore) {
+      highestScore = score;
+      bestMatch = key;
+    }
+  }
+  return highestScore >= 0.6 ? bestMatch : null;
+}
+
+function similarity(a, b) {
+  a = a.toLowerCase();
+  b = b.toLowerCase();
+  const longer = a.length > b.length ? a : b;
+  const shorter = a.length > b.length ? b : a;
+  const longerLength = longer.length;
+  if (longerLength === 0) return 1.0;
+  return (longerLength - editDistance(longer, shorter)) / longerLength;
+}
+
+function editDistance(s1, s2) {
+  const costs = [];
+  for (let i = 0; i <= s1.length; i++) {
+    let lastValue = i;
+    for (let j = 0; j <= s2.length; j++) {
+      if (i === 0)
+        costs[j] = j;
+      else {
+        if (j > 0) {
+          let newValue = costs[j - 1];
+          if (s1.charAt(i - 1) !== s2.charAt(j - 1))
+            newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+          costs[j - 1] = lastValue;
+          lastValue = newValue;
+        }
+      }
+    }
+    if (i > 0)
+      costs[s2.length] = lastValue;
+  }
+  return costs[s2.length];
+}
+
+function analyzeOCRText(text, imageData) {
+  const lines = text.toLowerCase().split(/\n|\r|,/).map(l => l.trim()).filter(Boolean);
 
   ingredientsList.innerHTML = '';
-  randomProduct.ingredients.forEach(ingredient => {
-    const el = document.createElement('div');
-    el.className = 'flex items-start';
 
-    let iconClass = 'text-green-500';
-    let icon = 'fa-check-circle';
+  for (const line of lines) {
+    const match = line.match(/([a-z\s]+)\s+(\d+\.?\d*)\s*(mg|g|kcal|%|mcg)?/);
+    if (match) {
+      const rawName = match[1].trim();
+      const value = match[2];
+      const unit = match[3] || '';
 
-    if (ingredient.safety === 'harmful') {
-      iconClass = 'text-red-500';
-      icon = 'fa-exclamation-circle';
-    } else if (ingredient.safety === 'moderate') {
-      iconClass = 'text-yellow-500';
-      icon = 'fa-info-circle';
+      const flatReference = Object.entries(nutritionReference).flatMap(([_, group]) => Object.keys(group));
+      const correctedName = getClosestMatch(rawName, Object.fromEntries(flatReference.map(key => [key, true])));
+
+      if (correctedName) {
+        const nutrient = Object.entries(nutritionReference).flatMap(([_, group]) => Object.entries(group)).find(([key]) => key === correctedName);
+
+        if (nutrient) {
+          const safety = nutrient[1].safety;
+          let color = 'text-yellow-500';
+          let icon = 'fa-info-circle';
+          if (parseFloat(value) === 0) {
+            color = 'text-gray-500';
+            icon = 'fa-minus-circle';
+          } else if (safety === 'safe') {
+            color = 'text-green-600';
+            icon = 'fa-check-circle';
+          } else if (safety === 'moderate') {
+            color = 'text-yellow-500';
+            icon = 'fa-info-circle';
+          } else if (safety === 'harmful') {
+            color = 'text-red-500';
+            icon = 'fa-exclamation-circle';
+          }
+
+          const el = document.createElement('div');
+          el.className = 'flex items-start';
+          el.innerHTML = `
+            <div class="flex-shrink-0 mt-1">
+              <i class="fas ${icon} ${color}"></i>
+            </div>
+            <div class="ml-3">
+              <p class="text-sm font-medium ${color}">${correctedName} — ${value}${unit}</p>
+            </div>
+          `;
+          ingredientsList.appendChild(el);
+        }
+      }
     }
-
-    el.innerHTML = `
-      <div class="flex-shrink-0 mt-1">
-        <i class="fas ${icon} ${iconClass}"></i>
-      </div>
-      <div class="ml-3">
-        <p class="text-sm font-medium ${ingredient.safety === 'harmful' ? 'text-red-700' : ingredient.safety === 'moderate' ? 'text-yellow-700' : 'text-gray-700'}">
-          ${ingredient.name}
-        </p>
-      </div>`;
-
-    ingredientsList.appendChild(el);
-  });
-
-  if (randomProduct.allergens.length > 0) {
-    allergenSection.classList.remove('hidden');
-    allergensList.innerHTML = '';
-    randomProduct.allergens.forEach(allergen => {
-      const el = document.createElement('span');
-      el.className = 'allergen-chip';
-      el.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i> ${allergen}`;
-      allergensList.appendChild(el);
-    });
-  } else {
-    allergenSection.classList.add('hidden');
   }
 
-  nutritionFacts.innerHTML = '';
-  randomProduct.nutrition.forEach(nutrient => {
-    const el = document.createElement('div');
-    el.className = 'flex justify-between items-center border-b border-gray-200 pb-2';
-    el.innerHTML = `
-      <span class="text-sm font-medium text-gray-500">${nutrient.name}</span>
-      <span class="text-sm font-medium text-gray-900">${nutrient.value} ${nutrient.unit}</span>`;
-    nutritionFacts.appendChild(el);
-  });
+  scannedImage.src = imageData;
+  productName.textContent = "Nutrition Label Scanned";
+  healthScore.textContent = "Nutrition Facts Analyzed";
+  healthScore.className = "px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800";
 }
 
-// Scroll-based animation
 window.addEventListener('DOMContentLoaded', () => {
   const features = document.querySelectorAll('.relative.group');
   const observer = new IntersectionObserver((entries) => {
