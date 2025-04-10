@@ -1,6 +1,5 @@
 // JavaScript for FoodGuard Web
 
-// DOM Elements
 const scannerModal = document.getElementById('scannerModal');
 const resultsModal = document.getElementById('resultsModal');
 const scanButton = document.getElementById('scanButton');
@@ -20,14 +19,24 @@ const newScanButton = document.getElementById('newScanButton');
 const imageUpload = document.getElementById('imageUpload');
 const preview = document.getElementById('preview');
 
+
 let stream = null;
 let isCameraMode = true;
 let nutritionReference = {};
+let flatNutrientKeys = [];
+let abbreviationMap = {};
 
-// Load reference JSON
+fetch('ocr_abbreviation_map.json')
+  .then(res => res.json())
+  .then(data => abbreviationMap = data);
+
+
 fetch('nutritional_facts_reference.json')
   .then(response => response.json())
-  .then(data => nutritionReference = data);
+  .then(data => {
+    nutritionReference = data;
+    flatNutrientKeys = Object.entries(data).flatMap(([_, group]) => Object.keys(group));
+  });
 
 scanButton.addEventListener('click', openScanner);
 closeScanner.addEventListener('click', closeScannerModal);
@@ -90,7 +99,7 @@ async function startCamera() {
     stream = await navigator.mediaDevices.getUserMedia({ video: true });
     videoElement.srcObject = stream;
   } catch (err) {
-    alert('Could not access camera. Please check your permissions.');
+    alert('Could not access camera. Please check permissions.');
     toggleMode();
   }
 }
@@ -112,19 +121,15 @@ function captureImage() {
     ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
     const imageDataUrl = canvas.toDataURL('image/jpeg');
     processImage(imageDataUrl);
-  } else {
-    if (fileUpload.files && fileUpload.files[0]) {
-      const reader = new FileReader();
-      reader.onload = (e) => processImage(e.target.result);
-      reader.readAsDataURL(fileUpload.files[0]);
-    }
+  } else if (fileUpload.files?.[0]) {
+    const reader = new FileReader();
+    reader.onload = (e) => processImage(e.target.result);
+    reader.readAsDataURL(fileUpload.files[0]);
   }
 }
 
 function handleFileUpload(e) {
-  if (e.target.files && e.target.files[0]) {
-    captureImage();
-  }
+  if (e.target.files?.[0]) captureImage();
 }
 
 function handleImageUploadFromHero(e) {
@@ -141,15 +146,32 @@ function handleImageUploadFromHero(e) {
   }
 }
 
-function processImage(imageData) {
+function upscaleImage(imageDataUrl, factor = 3) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width * factor;
+      canvas.height = img.height * factor;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(factor, factor);
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL('image/jpeg'));
+    };
+    img.src = imageDataUrl;
+  });
+}
+
+async function processImage(imageData) {
   closeScannerModal();
   showResults(imageData);
+  const upscaled = await upscaleImage(imageData);
 
-  Tesseract.recognize(imageData, 'eng', {
+  Tesseract.recognize(upscaled, 'eng', {
     logger: m => console.log(m)
   }).then(({ data: { text } }) => {
     productName.textContent = "Scan Complete";
-    analyzeOCRText(text, imageData);
+    analyzeOCRText(text, upscaled);
   }).catch(err => {
     console.error("OCR failed:", err);
     productName.textContent = "Failed to read label";
@@ -165,102 +187,53 @@ function showResults(imageData) {
   healthScore.textContent = '';
 }
 
-function getClosestMatch(term, dictionary) {
-  let bestMatch = null;
-  let highestScore = 0;
-
-  for (const key in dictionary) {
-    const score = similarity(term, key);
-    if (score > highestScore) {
-      highestScore = score;
-      bestMatch = key;
-    }
-  }
-  return highestScore >= 0.6 ? bestMatch : null;
-}
-
-function similarity(a, b) {
-  a = a.toLowerCase();
-  b = b.toLowerCase();
-  const longer = a.length > b.length ? a : b;
-  const shorter = a.length > b.length ? b : a;
-  const longerLength = longer.length;
-  if (longerLength === 0) return 1.0;
-  return (longerLength - editDistance(longer, shorter)) / longerLength;
-}
-
-function editDistance(s1, s2) {
-  const costs = [];
-  for (let i = 0; i <= s1.length; i++) {
-    let lastValue = i;
-    for (let j = 0; j <= s2.length; j++) {
-      if (i === 0)
-        costs[j] = j;
-      else {
-        if (j > 0) {
-          let newValue = costs[j - 1];
-          if (s1.charAt(i - 1) !== s2.charAt(j - 1))
-            newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
-          costs[j - 1] = lastValue;
-          lastValue = newValue;
-        }
-      }
-    }
-    if (i > 0)
-      costs[s2.length] = lastValue;
-  }
-  return costs[s2.length];
-}
-
 function analyzeOCRText(text, imageData) {
   const lines = text.toLowerCase().split(/\n|\r|,/).map(l => l.trim()).filter(Boolean);
-
   ingredientsList.innerHTML = '';
 
   for (const line of lines) {
-    const match = line.match(/([a-z\s]+)\s+(\d+\.?\d*)\s*(mg|g|kcal|%|mcg)?/);
+    const match = line.match(/([a-z.\s]+)\s+(\d+\.?\d*)\s*(mg|g|kcal|%|mcg)?/);
     if (match) {
-      const rawName = match[1].trim();
-      const value = match[2];
+      let rawName = match[1].trim();
+      const value = parseFloat(match[2]);
       const unit = match[3] || '';
 
-      const flatReference = Object.entries(nutritionReference).flatMap(([_, group]) => Object.keys(group));
-      const correctedName = getClosestMatch(rawName, Object.fromEntries(flatReference.map(key => [key, true])));
-
-      if (correctedName) {
-        const nutrient = Object.entries(nutritionReference).flatMap(([_, group]) => Object.entries(group)).find(([key]) => key === correctedName);
-
-        if (nutrient) {
-          const safety = nutrient[1].safety;
-          let color = 'text-yellow-500';
-          let icon = 'fa-info-circle';
-          if (parseFloat(value) === 0) {
-            color = 'text-gray-500';
-            icon = 'fa-minus-circle';
-          } else if (safety === 'safe') {
-            color = 'text-green-600';
-            icon = 'fa-check-circle';
-          } else if (safety === 'moderate') {
-            color = 'text-yellow-500';
-            icon = 'fa-info-circle';
-          } else if (safety === 'harmful') {
-            color = 'text-red-500';
-            icon = 'fa-exclamation-circle';
-          }
-
-          const el = document.createElement('div');
-          el.className = 'flex items-start';
-          el.innerHTML = `
-            <div class="flex-shrink-0 mt-1">
-              <i class="fas ${icon} ${color}"></i>
-            </div>
-            <div class="ml-3">
-              <p class="text-sm font-medium ${color}">${correctedName} — ${value}${unit}</p>
-            </div>
-          `;
-          ingredientsList.appendChild(el);
+      for (const abbr in abbreviationMap) {
+        if (rawName.includes(abbr)) {
+          rawName = abbreviationMap[abbr];
         }
       }
+
+      const correctedName = fuzzyMatch(rawName, flatNutrientKeys);
+      if (!correctedName) continue;
+
+      const entry = Object.entries(nutritionReference).flatMap(([_, group]) => Object.entries(group)).find(([key]) => key === correctedName);
+      if (!entry) continue;
+
+      const safety = entry[1].safety;
+      let color = 'text-yellow-500', icon = 'fa-info-circle';
+      if (value === 0) {
+        color = 'text-gray-500'; icon = 'fa-minus-circle';
+      } else if (safety === 'safe') {
+        color = 'text-green-600'; icon = 'fa-check-circle';
+      } else if (safety === 'moderate') {
+        color = 'text-yellow-500'; icon = 'fa-info-circle';
+      } else if (safety === 'harmful') {
+        color = 'text-red-500'; icon = 'fa-exclamation-circle';
+      }
+
+      const el = document.createElement('div');
+      el.className = 'flex items-start';
+      el.innerHTML = 
+        `<div class="flex items-center space-x-3 nutrient-item">
+          <div class="flex-shrink-0">
+            <i class="fas ${icon} ${color} text-lg"></i>
+          </div>
+          <div>
+            <p class="text-sm font-medium ${color}">${correctedName} — ${value}${unit}</p>
+          </div>
+        </div>`;
+      ingredientsList.appendChild(el);
     }
   }
 
@@ -268,6 +241,36 @@ function analyzeOCRText(text, imageData) {
   productName.textContent = "Nutrition Label Scanned";
   healthScore.textContent = "Nutrition Facts Analyzed";
   healthScore.className = "px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800";
+}
+
+function fuzzyMatch(input, referenceList) {
+  let bestMatch = '';
+  let lowestDistance = Infinity;
+  input = input.toLowerCase();
+
+  for (const ref of referenceList) {
+    const distance = levenshteinDistance(input, ref.toLowerCase());
+    if (distance < lowestDistance && distance / ref.length < 0.4) {
+      lowestDistance = distance;
+      bestMatch = ref;
+    }
+  }
+
+  return bestMatch || null;
+}
+
+function levenshteinDistance(a, b) {
+  const dp = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      if (a[i - 1] === b[j - 1]) dp[i][j] = dp[i - 1][j - 1];
+      else dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + 1);
+    }
+  }
+  return dp[a.length][b.length];
 }
 
 window.addEventListener('DOMContentLoaded', () => {
