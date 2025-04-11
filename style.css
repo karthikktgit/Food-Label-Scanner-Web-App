@@ -59,4 +59,10 @@
     background-color: #dbeafe;
     color: #1e40af;
   }
-  
+
+  #historyList div {
+    transition: transform 0.2s ease-in-out;
+  }
+  #historyList div:hover {
+    transform: scale(1.02);
+  }

@@ -1,7 +1,7 @@
 // Import Firebase modules
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.4.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.4.0/firebase-auth.js";
-import { getFirestore, collection, addDoc } from "https://www.gstatic.com/firebasejs/10.4.0/firebase-firestore.js";
+import { getFirestore, collection, addDoc, getDocs, query, orderBy } from "https://www.gstatic.com/firebasejs/10.4.0/firebase-firestore.js";
 
 // Firebase config
 const firebaseConfig = {
@@ -41,6 +41,9 @@ const healthScore = document.getElementById('healthScore');
 const newScanButton = document.getElementById('newScanButton');
 const imageUpload = document.getElementById('imageUpload');
 const preview = document.getElementById('preview');
+const historyModal = document.getElementById("historyModal");
+const historyList = document.getElementById("historyList");
+const closeHistoryModal = document.getElementById("closeHistoryModal");
 
 let isCameraMode = true;
 let stream = null;
@@ -49,51 +52,77 @@ let flatNutrientKeys = [];
 let abbreviationMap = {};
 
 // Firebase Auth
-onAuthStateChanged(auth, user => {
-  if (user) {
-    authButton.textContent = "Sign Out";
-    userName.textContent = `Hi, ${user.displayName}`;
-    userName.classList.remove("hidden");
-  } else {
-    authButton.textContent = "Sign In";
-    userName.textContent = "";
-    userName.classList.add("hidden");
-  }
-});
+// Commented out as per the suggested change
+// onAuthStateChanged(auth, user => {
+//   if (user) {
+//     authButton.textContent = "Sign Out";
+//     userName.textContent = `Hi, ${user.displayName}`;
+//     userName.classList.remove("hidden");
+//   } else {
+//     authButton.textContent = "Sign In";
+//     userName.textContent = "";
+//     userName.classList.add("hidden");
+//   }
+// });
 
 // 🔽 View History logic
-document.getElementById("historyButton").addEventListener("click", () => {
-  const user = auth.currentUser;
-  if (user) {
-    // You can later replace this with opening a modal or history page
-    alert("📜 Opening your scan history...");
-  } else {
-    alert("🔐 Please sign in to view your scan history.");
-  }
-});
+document.getElementById("historyButton").addEventListener("click", async () => {
+  const historyModal = document.getElementById("historyModal");
+  const historyList = document.getElementById("historyList");
 
-authButton.addEventListener("click", () => {
-  const user = auth.currentUser;
-  if (user) {
-    signOut(auth)
-      .then(() => {
-        alert("Signed out");
-        console.log("User signed out");
-      })
-      .catch((err) => console.error("Sign out error:", err));
-  } else {
-    signInWithPopup(auth, provider)
-      .then((result) => {
-        console.log("Signed in user:", result.user);
-        alert(`Welcome, ${result.user.displayName}`);
-      })
-      .catch((error) => {
-        console.error("Sign-in error:", error);
-        alert("Sign-in failed");
+  // Clear previous history
+  historyList.innerHTML = '<p class="text-gray-500 text-sm">Loading...</p>';
+
+  try {
+    // Fetch scan history from Firestore
+    const scans = await fetchScanHistory();
+
+    // Populate history list
+    historyList.innerHTML = '';
+    if (scans.length === 0) {
+      historyList.innerHTML = '<p class="text-gray-500 text-sm">No scans found.</p>';
+    } else {
+      scans.forEach(scan => {
+        const item = document.createElement("div");
+        item.className = "p-4 bg-gray-100 rounded-lg shadow-sm";
+        item.innerHTML = `
+          <img src="${scan.imageUrl}" alt="Scanned Image" class="w-full h-32 object-contain mb-2">
+            <p class="text-sm font-medium text-gray-900">
+              Date: ${scan.timestamp ? new Date(scan.timestamp?.seconds ? scan.timestamp.seconds * 1000 : scan.timestamp).toLocaleString() : "N/A"}
+            </p>
+            <p class="text-sm text-gray-700">
+              Ingredients: ${(Array.isArray(scan.ingredients) ? scan.ingredients : []).join(", ") || "N/A"}
+            </p>
+        `;
+        historyList.appendChild(item);
       });
+    }
+  } catch (error) {
+    console.error("Error fetching scan history:", error);
+    historyList.innerHTML = '<p class="text-red-500 text-sm">Failed to load history.</p>';
   }
+
+  // Show the modal
+  historyModal.classList.remove("hidden");
 });
 
+// Close history modal
+document.getElementById("closeHistoryModal").addEventListener("click", () => {
+  document.getElementById("historyModal").classList.add("hidden");
+});
+
+// Fetch scan history from Firestore
+async function fetchScanHistory() {
+  const scans = [];
+  const q = query(collection(db, "scanHistory"), orderBy("timestamp", "desc"));
+  const querySnapshot = await getDocs(q);
+
+  querySnapshot.forEach(doc => {
+    scans.push(doc.data());
+  });
+
+  return scans;
+}
 
 // Fetch abbreviation & reference data
 fetch('ocr_abbreviation_map.json')
@@ -230,12 +259,9 @@ async function processImage(imageData) {
       productName.textContent = "Scan Complete";
       analyzeOCRText(text, upscaled);
 
-      // 🔽 Save to Firestore if user is logged in
-      const user = auth.currentUser;
-      if (user) {
-        const nutritionItems = extractNutritionItems(text);
-        saveScanToFirestore(user.uid, imageData, nutritionItems);
-      }
+      // 🔽 Save to Firestore without user authentication
+      const nutritionItems = extractNutritionItems(text);
+      saveScanToFirestore(null, imageData, nutritionItems);
     })
     .catch(err => {
       console.error("OCR failed:", err);
@@ -272,17 +298,18 @@ function extractNutritionItems(text) {
 
 async function saveScanToFirestore(userId, imageUrl, nutritionItems) {
   try {
-    const docRef = await addDoc(collection(db, "scanHistory"), {
-      userId,
-      imageUrl,
-      nutritionItems,
+    await addDoc(collection(db, "scanHistory"), {
+      userId: userId || "anonymous",
+      imageUrl: imageUrl || "",
+      ingredients: nutritionItems?.map(item => item.name) || [],
       timestamp: new Date()
     });
-    console.log("✅ Scan saved with ID:", docRef.id);
+    console.log("✅ Scan saved.");
   } catch (error) {
     console.error("❌ Error saving scan:", error);
   }
 }
+
 
 function upscaleImage(imageDataUrl, factor = 3) {
   return new Promise((resolve) => {
