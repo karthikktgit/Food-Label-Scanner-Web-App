@@ -4,14 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FoodGuard Web - Smart Food Scanner</title>
-
-  <!-- Tailwind CSS -->
+  <link rel="icon" href="favicon.ico" type="image/x-icon">
   <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Font Awesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-
-  <!-- Custom CSS -->
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="bg-gray-50 font-sans">
@@ -24,14 +19,20 @@
           <i class="fas fa-shield-alt text-blue-500 text-2xl mr-2"></i>
           <span class="text-xl font-bold text-gray-900">FoodGuard</span>
         </div>
-        <div>
-          <button class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium transition duration-300">
+        <div class="flex items-center gap-4">
+          <button id="historyButton" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-md text-sm font-medium transition duration-300">
+            View History
+          </button>
+          <span id="userName" class="hidden text-gray-700 font-medium"></span>
+          <button id="authButton" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium transition duration-300">
             Sign In
           </button>
         </div>
       </div>
     </div>
   </nav>
+
+
 
   <!-- Scanner Modal -->
   <div id="scannerModal" class="fixed z-50 inset-0 overflow-y-auto hidden">
@@ -80,6 +81,21 @@
       </div>
     </div>
   </div>
+
+  <!-- Login Modal -->
+<div id="loginModal" class="fixed z-50 inset-0 overflow-y-auto hidden">
+  <div class="flex items-center justify-center min-h-screen bg-black bg-opacity-50">
+    <div class="bg-white rounded-lg p-6 max-w-sm w-full">
+      <h2 class="text-lg font-semibold text-gray-700 mb-4">Login with Email</h2>
+      <input id="loginEmail" type="email" placeholder="Email" class="w-full mb-2 px-4 py-2 border rounded" />
+      <input id="loginPassword" type="password" placeholder="Password" class="w-full mb-4 px-4 py-2 border rounded" />
+      <button id="loginSubmit" class="bg-blue-500 hover:bg-blue-600 text-white w-full py-2 rounded mb-2">Log In</button>
+      <button id="registerSubmit" class="text-sm text-blue-500 underline w-full">Create an account</button>
+      <button id="closeLoginModal" class="text-xs text-gray-400 underline w-full mt-2">Cancel</button>
+    </div>
+  </div>
+</div>
+
 
   <!-- Results Modal -->
   <div id="resultsModal" class="fixed z-50 inset-0 overflow-y-auto hidden">
@@ -223,6 +239,17 @@
     </div>
   </section>
 
+  <!-- History Modal -->
+  <div id="historyModal" class="fixed z-50 inset-0 overflow-y-auto hidden">
+    <div class="flex items-center justify-center min-h-screen bg-black bg-opacity-50">
+      <div class="bg-white rounded-lg p-6 w-full max-w-2xl overflow-y-auto max-h-[80vh]">
+        <h2 class="text-lg font-semibold text-gray-700 mb-4">Scan History</h2>
+        <div id="historyList" class="space-y-4"></div>
+        <button id="closeHistoryModal" class="text-xs text-gray-400 underline w-full mt-4">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- How It Works Section -->
   <section class="bg-white py-12">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -268,11 +295,13 @@
     </div>
   </section>
 
+  
+
+
   <!-- Link JS -->
-  <script src="main.js"></script>
+  <script type="module" src="main.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
   <script src="https://unpkg.com/tesseract.js@v4.0.2/dist/tesseract.min.js"></script>
-
-
+  
 </body>
 </html>
